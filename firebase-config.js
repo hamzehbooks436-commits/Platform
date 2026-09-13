@@ -1,10 +1,10 @@
 // Replace every value with the Firebase Web app configuration from Firebase Console.
 export const firebaseConfig = {
-  apiKey: "AIzaSyBnIrORg_qzZy5VmnlEodiyNd0u2MEBe88",
-  authDomain: "platform-f0dd3.firebaseapp.com",
-  databaseURL: "https://platform-f0dd3-default-rtdb.firebaseio.com",
-  projectId: "platform-f0dd3",
-  storageBucket: "platform-f0dd3.firebasestorage.app",
-  messagingSenderId: "965309259571",
-  appId: "1:965309259571:web:714b39cfcdd4815949a846"
+  apiKey: "AIzaSyB3HCXBnbq1s7HhZ6VHmZwSZT0rRbAu6yU",
+  authDomain: "platform-5180c.firebaseapp.com",
+  databaseURL: "https://platform-5180c-default-rtdb.firebaseio.com",
+  projectId: "platform-5180c",
+  storageBucket: "platform-5180c.firebasestorage.app",
+  messagingSenderId: "507347468058",
+  appId: "1:507347468058:web:9e6a65c2e15a20039136a3"
 };
