@@ -26,7 +26,8 @@ const examDates = ["November 2026", "January 2027", "June 2027"];
 
 function logOutLink() {
   document.querySelector("#logout")?.addEventListener("click", async event => {
-    event.preventDefault(); await signOut(auth); redirect("index.html");
+    event.preventDefault();
+    try { await signOut(auth); } finally { window.location.replace("index.html"); }
   });
 }
 
@@ -40,14 +41,14 @@ async function requireUser(user, adminOnly = false) {
 
 function authPage() {
   onAuthStateChanged(auth, user => { if (user && !creatingAccount) redirect("home.html"); });
-  document.querySelector("#login-form").addEventListener("submit", async event => {
+  document.querySelector("#login-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const username = usernameKey(document.querySelector("#login-user").value);
     if (!username) return setMessage("Use letters, numbers, dots, dashes, or underscores in the user name.");
     try { await signInWithEmailAndPassword(auth, accountEmail(username), document.querySelector("#login-password").value); redirect("home.html"); }
     catch { setMessage("The user name or password is not correct."); }
   });
-  document.querySelector("#signup-form").addEventListener("submit", async event => {
+  document.querySelector("#signup-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const name = document.querySelector("#signup-name").value.trim();
     const username = usernameKey(document.querySelector("#signup-user").value);
@@ -71,15 +72,20 @@ async function homePage(user) {
   const data = await requireUser(user); if (!data) return;
   document.querySelector("#welcome").textContent = `Welcome, ${data.profile?.name || "User"}`;
   if (Number(data.profile?.age) > 19) document.querySelector("#school-link").remove();
+  else document.querySelector("#school-page-link").href = "school-register.html";
   if (data.admin) document.querySelector("#admin-link").innerHTML = '- <a href="admin.html">Administrator home</a>';
   const preferences = (await get(ref(db, `users/${user.uid}/preferences`))).val() || {};
   const color = /^#[0-9a-f]{6}$/i.test(preferences.backgroundColor || "") ? preferences.backgroundColor : "#ffffff";
   document.body.style.backgroundColor = color;
-  document.querySelector("#background-color").value = color;
+  const colourInput = document.querySelector("#background-color");
+  colourInput.value = color;
+  colourInput.addEventListener("input", () => { document.body.style.backgroundColor = colourInput.value; });
   document.querySelector("#background-form").addEventListener("submit", async event => {
-    event.preventDefault(); const backgroundColor = document.querySelector("#background-color").value;
-    await set(ref(db, `users/${user.uid}/preferences/backgroundColor`), backgroundColor);
-    document.body.style.backgroundColor = backgroundColor; setMessage("Your home-page background colour was saved.");
+    event.preventDefault(); const backgroundColor = colourInput.value;
+    try {
+      await set(ref(db, `users/${user.uid}/preferences/backgroundColor`), backgroundColor);
+      document.body.style.backgroundColor = backgroundColor; setMessage("Your home-page background colour was saved.");
+    } catch { setMessage("Could not save the colour. Please try again."); }
   });
   logOutLink();
 }
@@ -88,6 +94,11 @@ async function propertyPage(user) {
   const data = await requireUser(user); if (!data) return;
   const property = (await get(ref(db, `users/${user.uid}/property`))).val() || {};
   document.querySelector("#property-details").innerHTML = `<b>Place name:</b> ${h(property.placeName || "Not set")}<br><b>Rent per month:</b> ${h(property.rent || 0)}<br><b>Address:</b> ${h(property.address || "Not set")}<br><b>Size:</b> ${h(property.size || "Not set")}`;
+}
+
+async function propertyRequestPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  const property = (await get(ref(db, `users/${user.uid}/property`))).val() || {};
   for (const key of ["placeName", "rent", "address", "size"]) document.querySelector(`#${key}`).value = property[key] ?? "";
   document.querySelector("#property-request-form").addEventListener("submit", async event => {
     event.preventDefault();
@@ -101,10 +112,22 @@ async function taxesPage(user) {
   const data = await requireUser(user); if (!data) return;
   const taxes = (await get(ref(db, `users/${user.uid}/taxes`))).val() || { status: "unpaid", amount: 0 };
   document.querySelector("#tax-details").innerHTML = `<b>Status:</b> ${h(taxes.status)}<br><b>Amount:</b> ${h(taxes.amount)}`;
-  document.querySelector("#tax-request-form").addEventListener("submit", async event => {
+  const form = (await get(ref(db, `users/${user.uid}/taxForm`))).val();
+  document.querySelector("#tax-form-link").innerHTML = form && taxes.status !== "paid" ? '- <a href="tax-form.html">Open your tax form and pay</a>' : "You must receive a tax form from the admin before you can pay.";
+}
+
+async function userTaxFormPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  const form = (await get(ref(db, `users/${user.uid}/taxForm`))).val();
+  const taxes = (await get(ref(db, `users/${user.uid}/taxes`))).val() || {};
+  const details = document.querySelector("#tax-form-details");
+  if (!form || taxes.status === "paid") { details.textContent = "There is no unpaid tax form for you."; return; }
+  details.innerHTML = `<b>Tax amount to pay:</b> ${h(form.amount)}`;
+  const payForm = document.querySelector("#pay-tax-form"); payForm.hidden = false;
+  payForm.addEventListener("submit", async event => {
     event.preventDefault();
-    await set(push(ref(db, "taxPaymentRequests")), { uid: user.uid, userName: data.profile?.name || data.profile?.username, requestedAt: Date.now() });
-    setMessage("Your tax form was sent to the admin.");
+    await set(ref(db, `taxPaymentRequests/${user.uid}`), { uid: user.uid, userName: data.profile?.name || data.profile?.username || "User", amount: form.amount, requestedAt: Date.now() });
+    setMessage("Your payment request was sent to the admin.");
   });
 }
 
@@ -206,8 +229,8 @@ async function taxFormsPage(user) {
   const requests = (await get(ref(db, "taxPaymentRequests"))).val() || {}; const area = document.querySelector("#requests"); area.innerHTML = "";
   if (!Object.keys(requests).length) area.textContent = "There are no tax forms.";
   Object.entries(requests).forEach(([id, request]) => {
-    const box = document.createElement("div"); box.innerHTML = `<hr><b>${h(request.userName)}</b> sent a tax payment request.<br>`;
-    const accept = document.createElement("button"); accept.textContent = "Accept: mark paid"; accept.onclick = async () => { await update(ref(db, `users/${request.uid}/taxes`), { status: "paid" }); await remove(ref(db, `taxPaymentRequests/${id}`)); location.reload(); };
+    const box = document.createElement("div"); box.innerHTML = `<hr><b>${h(request.userName)}</b> sent a tax payment request for ${h(request.amount)}.<br>`;
+    const accept = document.createElement("button"); accept.textContent = "Accept: mark paid"; accept.onclick = async () => { await update(ref(db, `users/${request.uid}/taxes`), { status: "paid" }); await remove(ref(db, `users/${request.uid}/taxForm`)); await remove(ref(db, `taxPaymentRequests/${id}`)); location.reload(); };
     const deny = document.createElement("button"); deny.textContent = "Deny"; deny.onclick = async () => { await remove(ref(db, `taxPaymentRequests/${id}`)); location.reload(); };
     box.append(accept, document.createTextNode(" "), deny); area.append(box);
   });
@@ -221,7 +244,8 @@ async function taxSettingsPage(user) {
     box.innerHTML = `<hr><b>${h(record.profile?.name || record.profile?.username || "User")}</b><br>Amount: <input type="number" min="0" value="${h(tax.amount)}"> Status: <select><option value="unpaid">unpaid</option><option value="paid">paid</option></select> `;
     box.querySelector("select").value = tax.status;
     const save = document.createElement("button"); save.textContent = "Save"; save.onclick = async () => { await set(ref(db, `users/${uid}/taxes`), { amount: Number(box.querySelector("input").value), status: box.querySelector("select").value }); setMessage("Tax settings saved."); };
-    box.append(save); area.append(box);
+    const issue = document.createElement("button"); issue.textContent = "Issue tax form"; issue.onclick = async () => { const amount = Number(box.querySelector("input").value); await update(ref(db), { [`users/${uid}/taxes`]: { amount, status: "unpaid" }, [`users/${uid}/taxForm`]: { amount, issuedAt: Date.now() } }); setMessage("Tax form issued."); };
+    box.append(save, document.createTextNode(" "), issue); area.append(box);
   });
 }
 
@@ -257,9 +281,8 @@ async function adminHomeworksPage(user) {
   const items = (await get(ref(db, "homeworks"))).val() || {}; const users = (await get(ref(db, "users"))).val() || {}; const area = document.querySelector("#admin-homework-list"); area.innerHTML = "";
   if (!Object.keys(items).length) area.textContent = "No homeworks yet.";
   for (const [id, item] of Object.entries(items)) {
-    const submissions = (await get(ref(db, `homeworkSubmissions/${id}`))).val() || {}; const box = document.createElement("div");
-    const answerKey = (await get(ref(db, `homeworkAnswerKeys/${id}`))).val() || {};
-        box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}`;
+    const submissions = (await get(ref(db, `homeworkSubmissions/${id}`))).val() || {}; const answerKey = (await get(ref(db, `homeworkAnswerKeys/${id}`))).val() || {}; const box = document.createElement("div");
+    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}`;
     Object.entries(submissions).forEach(([uid, submission]) => {
       const review = document.createElement("div"); const studentName = users[uid]?.profile?.name || users[uid]?.profile?.username || "Student";
       review.innerHTML = `<br><b>${h(studentName)}</b><br>Student answers: ${h(Object.values(submission.answers || {}).join(", "))}<br>Correct answers: ${h(Object.values(answerKey.answers || {}).join(", "))}<br>Overall grade (0-100): <input type="number" min="0" max="100" value="${h(submission.grade ?? "")}"> `;
@@ -307,7 +330,9 @@ if (page === "auth") {
   try {
     if (page === "home") await homePage(user);
     if (page === "property") await propertyPage(user);
+    if (page === "property-request") await propertyRequestPage(user);
     if (page === "taxes") await taxesPage(user);
+    if (page === "user-tax-form") await userTaxFormPage(user);
     if (page === "school") await schoolPage(user);
     if (page === "school-register") await schoolRegisterPage(user);
     if (page === "stem-subjects") await subjectsPage(user, stemSubjects);

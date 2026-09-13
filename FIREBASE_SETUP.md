@@ -38,24 +38,17 @@ Whenever this project changes its Firebase rules, copy this file again and click
 
 Only the UID placed in `admins` receives the administrator pages.
 
-## 5. Publish online with Firebase Hosting
+## 5. Publish online for free with GitHub Pages
 
-1. Install [Node.js LTS](https://nodejs.org/) on your computer.
-2. Open PowerShell in this folder (`Platform`).
-3. Run `npm install -g firebase-tools`.
-4. Run `firebase login` and complete the browser sign-in.
-5. Run `firebase init` and select both **Hosting** and **Functions**.
-   - Choose the Firebase project you made.
-   - For **public directory**, enter `.` (one dot).
-   - Choose **No** for single-page app.
-   - Choose **No** if asked to overwrite `index.html`.
-   - For Functions, choose **JavaScript**, then choose the existing `functions` folder if Firebase asks.
-6. Run `cd functions`, then `npm install`, then run `cd ..` to return to the Platform folder.
-7. Run `firebase deploy`. This also deploys the secure homework grading function. If Firebase asks you to enable billing for Functions, follow its prompt; the homework-grade feature needs Functions to run securely on Firebase.
-7. Firebase prints a Hosting URL. Open it and test sign-up, a property request, and the admin login.
+1. Create a public GitHub repository and upload the website files from this folder. Do not upload private credentials or `node_modules` folders.
+2. In the repository, open **Settings > Pages**.
+3. Under **Build and deployment**, select **Deploy from a branch**.
+4. Select branch **main** and folder **/(root)**, then click **Save**.
+5. GitHub Pages gives you a website address like `https://YOUR-USERNAME.github.io/Platform/`.
+6. Homework grading is free and manual: students submit answers, and the admin reviews them and enters the grade. No Firebase Functions or billing upgrade is needed.
 
 ## Important final check
 
-In Firebase Console go to **Authentication > Settings > Authorized domains**. Add the domain shown by Firebase Hosting if it is not already present. If you publish through GitHub Pages or another host instead, add that exact website domain there too.
+In Firebase Console go to **Authentication > Settings > Authorized domains**. Add your GitHub Pages domain, for example `YOUR-USERNAME.github.io`.
 
 Keep the administrator's Firebase credentials private. The setup above assigns that account's UID to the database `admins` list.
