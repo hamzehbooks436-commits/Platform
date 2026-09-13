@@ -164,7 +164,7 @@ async function homeworksPage(user) {
     onValue(ref(db, `homeworkSubmissions/${id}/${user.uid}`), snap => {
       const submission = snap.val();
       if (!submission) return;
-      result.innerHTML = submission.grade === undefined ? "Homework submitted. Your grade is being calculated." : `<p><b>Overall grade: ${h(submission.grade)}%</b><br>Correct answers: ${h(Object.values(submission.correctAnswers || {}).join(", "))}</p>`;
+      result.innerHTML = submission.grade === undefined ? "Homework submitted. Waiting for the admin to review and grade it." : `<p><b>Overall grade: ${h(submission.grade)}%</b><br>Correct answers: ${h(Object.values(submission.correctAnswers || {}).join(", "))}</p>`;
     });
     box.querySelector("form").addEventListener("submit", async event => {
       event.preventDefault(); const answers = {};
@@ -258,8 +258,19 @@ async function adminHomeworksPage(user) {
   if (!Object.keys(items).length) area.textContent = "No homeworks yet.";
   for (const [id, item] of Object.entries(items)) {
     const submissions = (await get(ref(db, `homeworkSubmissions/${id}`))).val() || {}; const box = document.createElement("div");
-    const submissionGrades = Object.entries(submissions).map(([uid, submission]) => `${h(users[uid]?.profile?.name || users[uid]?.profile?.username || "Student")}: ${submission.grade === undefined ? "grading" : `${h(submission.grade)}%`}`).join("<br>");
-    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}${submissionGrades ? `<br>${submissionGrades}` : ""}`;
+    const answerKey = (await get(ref(db, `homeworkAnswerKeys/${id}`))).val() || {};
+        box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}`;
+    Object.entries(submissions).forEach(([uid, submission]) => {
+      const review = document.createElement("div"); const studentName = users[uid]?.profile?.name || users[uid]?.profile?.username || "Student";
+      review.innerHTML = `<br><b>${h(studentName)}</b><br>Student answers: ${h(Object.values(submission.answers || {}).join(", "))}<br>Correct answers: ${h(Object.values(answerKey.answers || {}).join(", "))}<br>Overall grade (0-100): <input type="number" min="0" max="100" value="${h(submission.grade ?? "")}"> `;
+      const saveGrade = document.createElement("button"); saveGrade.textContent = "Save grade"; saveGrade.onclick = async () => {
+        const grade = Number(review.querySelector("input").value);
+        if (!Number.isFinite(grade) || grade < 0 || grade > 100) return setMessage("Enter a grade from 0 to 100.");
+        await update(ref(db, `homeworkSubmissions/${id}/${uid}`), { grade, correctAnswers: answerKey.answers || [], gradedAt: Date.now() });
+        setMessage(`Saved ${studentName}'s homework grade.`);
+      };
+      review.append(saveGrade); box.append(review);
+    });
     const removeButton = document.createElement("button"); removeButton.textContent = "Remove homework"; removeButton.onclick = async () => { await remove(ref(db, `homeworks/${id}`)); await remove(ref(db, `homeworkAnswerKeys/${id}`)); location.reload(); }; box.append(document.createTextNode(" "), removeButton); area.append(box);
   }
 }
