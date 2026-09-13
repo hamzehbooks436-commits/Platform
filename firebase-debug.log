@@ -1,0 +1,20 @@
+[debug] [2026-09-13T18:00:47.650Z] ----------------------------------------------------------------------
+[debug] [2026-09-13T18:00:47.654Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\hamze\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js init
+[debug] [2026-09-13T18:00:47.654Z] CLI Version:   15.30.0
+[debug] [2026-09-13T18:00:47.654Z] Platform:      win32
+[debug] [2026-09-13T18:00:47.654Z] Node Version:  v24.21.0
+[debug] [2026-09-13T18:00:47.654Z] Detected Agent: unknown
+[debug] [2026-09-13T18:00:47.654Z] Time:          Sun Sep 13 2026 21:00:47 GMT+0300 (GMT+03:00)
+[debug] [2026-09-13T18:00:47.654Z] ----------------------------------------------------------------------
+[debug] 
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  C:\Users\hamze\Home\Desktop\Folder_1\SW and tests\Platform
+

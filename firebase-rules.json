@@ -1,0 +1,35 @@
+{
+  "rules": {
+    ".read": "auth != null && root.child('admins').child(auth.uid).val() == true",
+    ".write": "auth != null && root.child('admins').child(auth.uid).val() == true",
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() == true)",
+        "profile": { ".write": "auth != null && auth.uid == $uid" },
+        "property": { ".write": "auth != null && ((auth.uid == $uid && !data.exists()) || root.child('admins').child(auth.uid).val() == true)" },
+        "taxes": { ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" },
+        "preferences": { ".write": "auth != null && auth.uid == $uid" },
+        "school": {
+          "registeredAt": { ".write": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() == true)" },
+          "subjects": { ".write": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() == true)" },
+          "grades": { ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" }
+        }
+      }
+    },
+    "usernames": { "$name": { ".read": "auth != null", ".write": "auth != null && !data.exists() && newData.val() == auth.uid" } },
+    "propertyEditRequests": { "$id": { ".read": "auth != null && (data.child('uid').val() == auth.uid || root.child('admins').child(auth.uid).val() == true)", ".write": "auth != null && ((!data.exists() && newData.child('uid').val() == auth.uid) || root.child('admins').child(auth.uid).val() == true)" } },
+    "taxPaymentRequests": { "$id": { ".read": "auth != null && (data.child('uid').val() == auth.uid || root.child('admins').child(auth.uid).val() == true)", ".write": "auth != null && ((!data.exists() && newData.child('uid').val() == auth.uid) || root.child('admins').child(auth.uid).val() == true)" } },
+    "admins": { "$uid": { ".read": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() == true)", ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" } },
+    "homeworks": { ".read": "auth != null", ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" },
+    "homeworkAnswerKeys": { ".read": "auth != null && root.child('admins').child(auth.uid).val() == true", ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" },
+    "homeworkSubmissions": {
+      ".read": "auth != null && root.child('admins').child(auth.uid).val() == true",
+      ".write": "auth != null && root.child('admins').child(auth.uid).val() == true",
+      "$homeworkId": { "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid && !data.exists() && newData.hasChildren(['answers', 'submittedAt']) && !newData.child('grade').exists()"
+      }}
+    },
+    "upcomingExams": { ".read": "auth != null", ".write": "auth != null && root.child('admins').child(auth.uid).val() == true" }
+  }
+}
