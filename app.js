@@ -18,11 +18,33 @@ const accountEmail = user => `${usernameKey(user)}@platform.example`;
 const isAdmin = async uid => (await get(ref(db, `admins/${uid}`))).val() === true;
 const redirect = url => { window.location.href = url; };
 let creatingAccount = false;
-const stemSubjects = ["Physics", "Biology", "Chemistry", "Mathematics", "Engineering", "Gardening", "Cooking"];
+const stemSubjects = ["Physics", "Biology", "Chemistry", "Mathematics", "Computer Science", "Engineering", "Gardening", "Cooking"];
 const literatureSubjects = ["English", "French", "History", "Art and design", "Detectivism and Mysteries"];
 const allSubjects = [...stemSubjects, ...literatureSubjects];
 const requiredSubjects = new Set(["Mathematics", "English", "French"]);
 const examDates = ["November 2026", "January 2027", "June 2027"];
+const validColour = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#ffffff";
+const validFontColour = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#000000";
+const validFontSize = value => [18, 24, 32, 40].includes(Number(value)) ? Number(value) : 24;
+
+async function applyAccountTheme(user) {
+  const backgroundColor = validColour((await get(ref(db, `users/${user.uid}/preferences/backgroundColor`))).val());
+  document.body.style.backgroundColor = backgroundColor;
+  document.body.dataset.accountBackground = backgroundColor;
+  return backgroundColor;
+}
+
+function readHomeworkPicture(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve("");
+    if (!file.type.startsWith("image/")) return reject(new Error("Choose an image file."));
+    if (file.size > 1.5 * 1024 * 1024) return reject(new Error("The picture must be smaller than 1.5 MB."));
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("The picture could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
 
 function logOutLink() {
   document.querySelector("#logout")?.addEventListener("click", async event => {
@@ -74,9 +96,7 @@ async function homePage(user) {
   if (Number(data.profile?.age) > 19) document.querySelector("#school-link").remove();
   else document.querySelector("#school-page-link").href = "school-register.html";
   if (data.admin) document.querySelector("#admin-link").innerHTML = '- <a href="admin.html">Administrator home</a>';
-  const preferences = (await get(ref(db, `users/${user.uid}/preferences`))).val() || {};
-  const color = /^#[0-9a-f]{6}$/i.test(preferences.backgroundColor || "") ? preferences.backgroundColor : "#ffffff";
-  document.body.style.backgroundColor = color;
+  const color = document.body.dataset.accountBackground || await applyAccountTheme(user);
   const colourInput = document.querySelector("#background-color");
   colourInput.value = color;
   colourInput.addEventListener("input", () => { document.body.style.backgroundColor = colourInput.value; });
@@ -84,7 +104,7 @@ async function homePage(user) {
     event.preventDefault(); const backgroundColor = colourInput.value;
     try {
       await set(ref(db, `users/${user.uid}/preferences/backgroundColor`), backgroundColor);
-      document.body.style.backgroundColor = backgroundColor; setMessage("Your home-page background colour was saved.");
+      document.body.style.backgroundColor = backgroundColor; setMessage("Your background colour was saved for all of your pages.");
     } catch { setMessage("Could not save the colour. Please try again."); }
   });
   logOutLink();
@@ -113,7 +133,16 @@ async function taxesPage(user) {
   const taxes = (await get(ref(db, `users/${user.uid}/taxes`))).val() || { status: "unpaid", amount: 0 };
   document.querySelector("#tax-details").innerHTML = `<b>Status:</b> ${h(taxes.status)}<br><b>Amount:</b> ${h(taxes.amount)}`;
   const form = (await get(ref(db, `users/${user.uid}/taxForm`))).val();
-  document.querySelector("#tax-form-link").innerHTML = form && taxes.status !== "paid" ? '- <a href="tax-form.html">Open your tax form and pay</a>' : "You must receive a tax form from the admin before you can pay.";
+  const request = (await get(ref(db, `taxFormRequests/${user.uid}`))).val();
+  const link = document.querySelector("#tax-form-link"); const requestForm = document.querySelector("#tax-form-request");
+  if (form && taxes.status !== "paid") link.innerHTML = '- <a href="tax-form.html">Open your tax form and pay</a>';
+  else if (request) link.textContent = "Your tax request is waiting for the admin.";
+  else { link.textContent = "Send a tax request to the admin before you pay."; requestForm.hidden = false; }
+  requestForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    await set(ref(db, `taxFormRequests/${user.uid}`), { uid: user.uid, userName: data.profile?.name || data.profile?.username || "User", requestedAt: Date.now() });
+    requestForm.hidden = true; link.textContent = "Your tax request was sent and is waiting for the admin.";
+  });
 }
 
 async function userTaxFormPage(user) {
@@ -181,7 +210,9 @@ async function homeworksPage(user) {
   if (!assignments.length) area.textContent = "There are no homeworks for your selected subjects.";
   assignments.forEach(([id, item]) => {
     const box = document.createElement("div"); const questions = Object.values(item.questions || {});
+    const style = item.style || {}; box.style.color = validFontColour(style.fontColor); box.style.fontSize = `${validFontSize(style.fontSize)}px`; box.style.backgroundColor = validColour(style.backgroundColor); box.style.padding = "10px";
     box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><form id="work-${id}">${questions.map((question, index) => `<p>${index + 1}. ${h(question.text)}<br><select name="q${index}" required><option value="">Choose an answer</option>${Object.values(question.choices || {}).map(choice => `<option value="${h(choice)}">${h(choice)}</option>`).join("")}</select></p>`).join("")}<button>Submit homework</button></form><div id="result-${id}"></div>`;
+    if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "100%"; picture.style.maxHeight = "450px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.querySelector("form").before(picture); }
     area.append(box);
     const result = box.querySelector(`#result-${id}`);
     onValue(ref(db, `homeworkSubmissions/${id}/${user.uid}`), snap => {
@@ -226,8 +257,14 @@ async function propertyRequestsPage(user) {
 
 async function taxFormsPage(user) {
   const data = await requireUser(user, true); if (!data) return;
-  const requests = (await get(ref(db, "taxPaymentRequests"))).val() || {}; const area = document.querySelector("#requests"); area.innerHTML = "";
-  if (!Object.keys(requests).length) area.textContent = "There are no tax forms.";
+  const formRequests = (await get(ref(db, "taxFormRequests"))).val() || {}; const requests = (await get(ref(db, "taxPaymentRequests"))).val() || {}; const users = (await get(ref(db, "users"))).val() || {}; const area = document.querySelector("#requests"); area.innerHTML = "";
+  if (!Object.keys(formRequests).length && !Object.keys(requests).length) area.textContent = "There are no tax form requests.";
+  Object.entries(formRequests).forEach(([id, request]) => {
+    const amount = Number(users[request.uid]?.taxes?.amount || 0); const box = document.createElement("div"); box.innerHTML = `<hr><b>${h(request.userName)}</b> requested a tax form for ${h(amount)}.<br>`;
+    const accept = document.createElement("button"); accept.textContent = "Accept and issue tax form"; accept.onclick = async () => { await update(ref(db), { [`users/${request.uid}/taxes`]: { amount, status: "unpaid" }, [`users/${request.uid}/taxForm`]: { amount, issuedAt: Date.now() } }); await remove(ref(db, `taxFormRequests/${id}`)); location.reload(); };
+    const deny = document.createElement("button"); deny.textContent = "Deny"; deny.onclick = async () => { await remove(ref(db, `taxFormRequests/${id}`)); location.reload(); };
+    box.append(accept, document.createTextNode(" "), deny); area.append(box);
+  });
   Object.entries(requests).forEach(([id, request]) => {
     const box = document.createElement("div"); box.innerHTML = `<hr><b>${h(request.userName)}</b> sent a tax payment request for ${h(request.amount)}.<br>`;
     const accept = document.createElement("button"); accept.textContent = "Accept: mark paid"; accept.onclick = async () => { await update(ref(db, `users/${request.uid}/taxes`), { status: "paid" }); await remove(ref(db, `users/${request.uid}/taxForm`)); await remove(ref(db, `taxPaymentRequests/${id}`)); location.reload(); };
@@ -244,8 +281,7 @@ async function taxSettingsPage(user) {
     box.innerHTML = `<hr><b>${h(record.profile?.name || record.profile?.username || "User")}</b><br>Amount: <input type="number" min="0" value="${h(tax.amount)}"> Status: <select><option value="unpaid">unpaid</option><option value="paid">paid</option></select> `;
     box.querySelector("select").value = tax.status;
     const save = document.createElement("button"); save.textContent = "Save"; save.onclick = async () => { await set(ref(db, `users/${uid}/taxes`), { amount: Number(box.querySelector("input").value), status: box.querySelector("select").value }); setMessage("Tax settings saved."); };
-    const issue = document.createElement("button"); issue.textContent = "Issue tax form"; issue.onclick = async () => { const amount = Number(box.querySelector("input").value); await update(ref(db), { [`users/${uid}/taxes`]: { amount, status: "unpaid" }, [`users/${uid}/taxForm`]: { amount, issuedAt: Date.now() } }); setMessage("Tax form issued."); };
-    box.append(save, document.createTextNode(" "), issue); area.append(box);
+    box.append(save); area.append(box);
   });
 }
 
@@ -274,8 +310,12 @@ async function adminHomeworksPage(user) {
       if (choices.length < 2 || !choices.includes(answer)) return setMessage(`Question ${number} needs at least two choices, and its correct answer must exactly match one choice.`);
       savedQuestions.push({ text, choices }); answers.push(answer);
     }
+    let picture;
+    try { picture = await readHomeworkPicture(document.querySelector("#homework-picture").files[0]); }
+    catch (error) { return setMessage(error.message); }
+    const style = { fontColor: document.querySelector("#homework-font-color").value, fontSize: validFontSize(document.querySelector("#homework-font-size").value), backgroundColor: document.querySelector("#homework-background-color").value };
     const id = push(ref(db, "homeworks")).key;
-    await update(ref(db), { [`homeworks/${id}`]: { subject: document.querySelector("#homework-subject").value, title: document.querySelector("#homework-title").value.trim(), questions: savedQuestions, createdAt: Date.now() }, [`homeworkAnswerKeys/${id}`]: { answers } });
+    await update(ref(db), { [`homeworks/${id}`]: { subject: document.querySelector("#homework-subject").value, title: document.querySelector("#homework-title").value.trim(), questions: savedQuestions, picture, style, createdAt: Date.now() }, [`homeworkAnswerKeys/${id}`]: { answers } });
     setMessage("Homework was created."); document.querySelector("#homework-form").reset(); location.reload();
   });
   const items = (await get(ref(db, "homeworks"))).val() || {}; const users = (await get(ref(db, "users"))).val() || {}; const area = document.querySelector("#admin-homework-list"); area.innerHTML = "";
@@ -283,6 +323,7 @@ async function adminHomeworksPage(user) {
   for (const [id, item] of Object.entries(items)) {
     const submissions = (await get(ref(db, `homeworkSubmissions/${id}`))).val() || {}; const answerKey = (await get(ref(db, `homeworkAnswerKeys/${id}`))).val() || {}; const box = document.createElement("div");
     box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}`;
+    if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "300px"; picture.style.maxHeight = "200px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.append(picture); }
     Object.entries(submissions).forEach(([uid, submission]) => {
       const review = document.createElement("div"); const studentName = users[uid]?.profile?.name || users[uid]?.profile?.username || "Student";
       review.innerHTML = `<br><b>${h(studentName)}</b><br>Student answers: ${h(Object.values(submission.answers || {}).join(", "))}<br>Correct answers: ${h(Object.values(answerKey.answers || {}).join(", "))}<br>Overall grade (0-100): <input type="number" min="0" max="100" value="${h(submission.grade ?? "")}"> `;
@@ -328,6 +369,7 @@ if (page === "auth") {
 } else onAuthStateChanged(auth, async user => {
   if (!user) return redirect("index.html");
   try {
+    await applyAccountTheme(user);
     if (page === "home") await homePage(user);
     if (page === "property") await propertyPage(user);
     if (page === "property-request") await propertyRequestPage(user);
