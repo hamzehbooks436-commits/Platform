@@ -26,6 +26,51 @@ const examDates = ["November 2026", "January 2027", "June 2027"];
 const validColour = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#ffffff";
 const validFontColour = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#000000";
 const validFontSize = value => [18, 24, 32, 40].includes(Number(value)) ? Number(value) : 24;
+const formatJod = cents => `${(Number(cents || 0) / 100).toFixed(2)} JOD`;
+
+function isLuhnValid(number) {
+  return number.split("").reverse().reduce((sum, digit, index) => {
+    let value = Number(digit); if (index % 2) value = value > 4 ? value * 2 - 9 : value * 2;
+    return sum + value;
+  }, 0) % 10 === 0;
+}
+
+function createMockCardNumber() {
+  let number;
+  do number = `9${Array.from({ length: 15 }, () => Math.floor(Math.random() * 10)).join("")}`;
+  while (isLuhnValid(number));
+  return number;
+}
+
+async function createUniqueMockCard(user) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const cardNumber = createMockCardNumber();
+    const reservation = await runTransaction(ref(db, `bankCardNumbers/${cardNumber}`), current => current === null ? user.uid : undefined);
+    if (reservation.committed) return cardNumber;
+  }
+  throw new Error("A unique mock card could not be created. Please try again.");
+}
+
+async function ensureBankAccount(user, profile) {
+  const current = (await get(ref(db, `users/${user.uid}/bank`))).val();
+  if (current?.cardNumber) {
+    await set(ref(db, `bankAccounts/${user.uid}`), { username: profile?.username || "User" });
+    return current;
+  }
+  const cardNumber = await createUniqueMockCard(user);
+  const account = {
+    balanceCents: 1500,
+    cardNumber,
+    cardholder: profile?.name || profile?.username || "Platform User",
+    expiry: `${String(Math.floor(Math.random() * 12) + 1).padStart(2, "0")}/${new Date().getFullYear() + 4}`,
+    securityCode: String(Math.floor(Math.random() * 900) + 100),
+    createdAt: Date.now()
+  };
+  const saved = await runTransaction(ref(db, `users/${user.uid}/bank`), value => value || account);
+  const bank = saved.snapshot.val();
+  await set(ref(db, `bankAccounts/${user.uid}`), { username: profile?.username || "User" });
+  return bank;
+}
 
 async function applyAccountTheme(user) {
   const backgroundColor = validColour((await get(ref(db, `users/${user.uid}/preferences/backgroundColor`))).val());
@@ -114,6 +159,54 @@ async function propertyPage(user) {
   const data = await requireUser(user); if (!data) return;
   const property = (await get(ref(db, `users/${user.uid}/property`))).val() || {};
   document.querySelector("#property-details").innerHTML = `<b>Place name:</b> ${h(property.placeName || "Not set")}<br><b>Rent per month:</b> ${h(property.rent || 0)}<br><b>Address:</b> ${h(property.address || "Not set")}<br><b>Size:</b> ${h(property.size || "Not set")}`;
+}
+
+async function bankPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  let bank;
+  try { bank = await ensureBankAccount(user, data.profile); }
+  catch (error) { return setMessage(error.message); }
+  const details = document.querySelector("#bank-details");
+  const spacedNumber = String(bank.cardNumber || "").replace(/(.{4})/g, "$1 ").trim();
+  details.innerHTML = `<b>Balance:</b> ${h(formatJod(bank.balanceCents))}<br><br><b>Mock Platform card</b><br>Cardholder: ${h(bank.cardholder)}<br>Card number: ${h(spacedNumber)}<br>Expiry: ${h(bank.expiry)}<br>Security code: ${h(bank.securityCode)}`;
+
+  const accounts = (await get(ref(db, "bankAccounts"))).val() || {};
+  const recipient = document.querySelector("#bank-recipient");
+  recipient.innerHTML = `<option value="">Choose a user</option>${Object.entries(accounts).filter(([uid]) => uid !== user.uid).map(([uid, account]) => `<option value="${h(uid)}">${h(account.username || "User")}</option>`).join("")}`;
+  if (recipient.options.length === 1) recipient.insertAdjacentHTML("afterend", "<br><small>Other users appear here after they open their Bank page once.</small>");
+
+  document.querySelector("#send-money-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const recipientUid = recipient.value;
+    const amountCents = Math.round(Number(document.querySelector("#bank-amount").value) * 100);
+    if (!recipientUid || !Number.isSafeInteger(amountCents) || amountCents <= 0) return setMessage("Choose a user and enter a valid amount.");
+    const debit = await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => {
+      const balance = Number(current || 0); return balance >= amountCents ? balance - amountCents : undefined;
+    });
+    if (!debit.committed) return setMessage("You do not have enough money for that transfer.");
+    const transferId = push(ref(db, `bankTransfers/${recipientUid}`)).key;
+    try {
+      await set(ref(db, `bankTransfers/${recipientUid}/${transferId}`), { senderUid: user.uid, senderName: data.profile?.username || data.profile?.name || "User", recipientUid, amountCents, status: "pending", createdAt: Date.now() });
+      setMessage(`${formatJod(amountCents)} was sent.`); event.target.reset(); location.reload();
+    } catch (error) {
+      await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => Number(current || 0) + amountCents);
+      setMessage("The transfer could not be sent, so your money was returned.");
+    }
+  });
+
+  const incoming = (await get(ref(db, `bankTransfers/${user.uid}`))).val() || {}; const area = document.querySelector("#incoming-transfers"); area.innerHTML = "";
+  const pending = Object.entries(incoming).filter(([, transfer]) => transfer?.status === "pending");
+  if (!pending.length) area.textContent = "There is no money waiting for you.";
+  pending.forEach(([id, transfer]) => {
+    const row = document.createElement("div"); row.innerHTML = `<hr><b>${h(transfer.senderName || "User")}</b> sent you ${h(formatJod(transfer.amountCents))}. `;
+    const receive = document.createElement("button"); receive.textContent = "Receive money"; receive.onclick = async () => {
+      const claim = await runTransaction(ref(db, `bankTransfers/${user.uid}/${id}`), current => current?.status === "pending" ? { ...current, status: "received", receivedAt: Date.now() } : undefined);
+      if (!claim.committed) return setMessage("This transfer has already been received.");
+      await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => Number(current || 0) + Number(transfer.amountCents || 0));
+      setMessage(`${formatJod(transfer.amountCents)} was added to your balance.`); location.reload();
+    };
+    row.append(receive); area.append(row);
+  });
 }
 
 async function propertyRequestPage(user) {
@@ -435,6 +528,7 @@ if (page === "auth") {
     await applyAccountTheme(user);
     if (page === "home") await homePage(user);
     if (page === "property") await propertyPage(user);
+    if (page === "bank") await bankPage(user);
     if (page === "property-request") await propertyRequestPage(user);
     if (page === "taxes") await taxesPage(user);
     if (page === "user-tax-form") await userTaxFormPage(user);
