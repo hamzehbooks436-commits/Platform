@@ -94,7 +94,7 @@ async function homePage(user) {
   const data = await requireUser(user); if (!data) return;
   document.querySelector("#welcome").textContent = `Welcome, ${data.profile?.name || "User"}`;
   if (Number(data.profile?.age) > 19) document.querySelector("#school-link").remove();
-  else document.querySelector("#school-page-link").href = "school-register.html";
+  else document.querySelector("#school-page-link").href = "school.html";
   if (data.admin) document.querySelector("#admin-link").innerHTML = '- <a href="admin.html">Administrator home</a>';
   const color = document.body.dataset.accountBackground || await applyAccountTheme(user);
   const colourInput = document.querySelector("#background-color");
@@ -201,6 +201,20 @@ function selectedSubjects(school) {
   return Object.entries(school?.subjects || {}).filter(([, value]) => value?.taken).map(([subject]) => subject);
 }
 
+function homeworkQuestionHtml(question, index) {
+  if (question.type === "matching") {
+    const pairs = Array.isArray(question.pairs) ? question.pairs : [];
+    const answers = pairs.map(pair => pair.right).sort(() => Math.random() - 0.5);
+    return `<p>${index + 1}. ${h(question.text)}<br><small>Match each item with its answer.</small>${pairs.map((pair, pairIndex) => `<br>${h(pair.left)}: <select name="q${index}-${pairIndex}" required><option value="">Choose an answer</option>${answers.map(answer => `<option value="${h(answer)}">${h(answer)}</option>`).join("")}</select>`).join("")}</p>`;
+  }
+  return `<p>${index + 1}. ${h(question.text)}<br><select name="q${index}" required><option value="">Choose an answer</option>${Object.values(question.choices || {}).map(choice => `<option value="${h(choice)}">${h(choice)}</option>`).join("")}</select></p>`;
+}
+
+function homeworkAnswerText(answer) {
+  if (answer && typeof answer === "object") return Object.entries(answer).map(([left, right]) => `${left} → ${right}`).join("; ");
+  return String(answer ?? "");
+}
+
 async function homeworksPage(user) {
   const data = await requireUser(user); if (!data) return;
   const school = (await get(ref(db, `users/${user.uid}/school`))).val(); const taken = new Set(selectedSubjects(school));
@@ -211,18 +225,21 @@ async function homeworksPage(user) {
   assignments.forEach(([id, item]) => {
     const box = document.createElement("div"); const questions = Object.values(item.questions || {});
     const style = item.style || {}; box.style.color = validFontColour(style.fontColor); box.style.fontSize = `${validFontSize(style.fontSize)}px`; box.style.backgroundColor = validColour(style.backgroundColor); box.style.padding = "10px";
-    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><form id="work-${id}">${questions.map((question, index) => `<p>${index + 1}. ${h(question.text)}<br><select name="q${index}" required><option value="">Choose an answer</option>${Object.values(question.choices || {}).map(choice => `<option value="${h(choice)}">${h(choice)}</option>`).join("")}</select></p>`).join("")}<button>Submit homework</button></form><div id="result-${id}"></div>`;
+    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><form id="work-${id}">${questions.map(homeworkQuestionHtml).join("")}<button>Submit homework</button></form><div id="result-${id}"></div>`;
     if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "100%"; picture.style.maxHeight = "450px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.querySelector("form").before(picture); }
     area.append(box);
     const result = box.querySelector(`#result-${id}`);
     onValue(ref(db, `homeworkSubmissions/${id}/${user.uid}`), snap => {
       const submission = snap.val();
       if (!submission) return;
-      result.innerHTML = submission.grade === undefined ? "Homework submitted. Waiting for the admin to review and grade it." : `<p><b>Overall grade: ${h(submission.grade)}%</b><br>Correct answers: ${h(Object.values(submission.correctAnswers || {}).join(", "))}</p>`;
+      result.innerHTML = submission.grade === undefined ? "Homework submitted. Waiting for the admin to review and grade it." : `<p><b>Overall grade: ${h(submission.grade)}%</b><br>Correct answers: ${h(Object.values(submission.correctAnswers || {}).map(homeworkAnswerText).join(", "))}</p>`;
     });
     box.querySelector("form").addEventListener("submit", async event => {
       event.preventDefault(); const answers = {};
-      questions.forEach((question, index) => { answers[index] = box.querySelector(`[name="q${index}"]`).value; });
+      questions.forEach((question, index) => {
+        if (question.type === "matching") answers[index] = Object.fromEntries((question.pairs || []).map((pair, pairIndex) => [pair.left, box.querySelector(`[name="q${index}-${pairIndex}"]`).value]));
+        else answers[index] = box.querySelector(`[name="q${index}"]`).value;
+      });
       await set(ref(db, `homeworkSubmissions/${id}/${user.uid}`), { answers, submittedAt: Date.now() });
     });
   });
@@ -239,6 +256,29 @@ async function upcomingExamsPage(user) {
   const school = (await get(ref(db, `users/${user.uid}/school`))).val(); const taken = new Set(selectedSubjects(school));
   const exams = (await get(ref(db, "upcomingExams"))).val() || {}; const list = Object.values(exams).filter(exam => taken.has(exam.subject));
   document.querySelector("#exam-list").innerHTML = list.length ? list.map(exam => `<hr><b>${h(exam.subject)}</b><br>${h(exam.date)}<br>${h(exam.details)}`).join("") : "There are no upcoming exams for your selected subjects.";
+}
+
+async function announcementsPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  if (Number(data.profile?.age) > 19) return redirect("home.html");
+  const school = (await get(ref(db, `users/${user.uid}/school`))).val();
+  if (![...requiredSubjects].every(subject => school?.subjects?.[subject]?.taken)) return redirect("school-register.html");
+  const announcements = Object.values((await get(ref(db, "announcements"))).val() || {}).sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  const area = document.querySelector("#announcement-list");
+  area.innerHTML = announcements.length ? announcements.map(item => `<hr><b>${h(item.title)}</b><br>${h(item.details).replace(/\n/g, "<br>")}<br><small>${h(new Date(item.createdAt).toLocaleString())}</small>`).join("") : "There are no announcements yet.";
+}
+
+async function adminAnnouncementsPage(user) {
+  const data = await requireUser(user, true); if (!data) return;
+  document.querySelector("#announcement-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    await set(push(ref(db, "announcements")), { title: document.querySelector("#announcement-title").value.trim(), details: document.querySelector("#announcement-details").value.trim(), createdAt: Date.now() });
+    setMessage("Announcement posted."); event.target.reset(); location.reload();
+  });
+  const announcements = (await get(ref(db, "announcements"))).val() || {}; const area = document.querySelector("#admin-announcement-list"); area.innerHTML = "";
+  const entries = Object.entries(announcements).sort(([, a], [, b]) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  if (!entries.length) area.textContent = "There are no announcements yet.";
+  entries.forEach(([id, item]) => { const row = document.createElement("div"); row.innerHTML = `<hr><b>${h(item.title)}</b><br>${h(item.details).replace(/\n/g, "<br>")}<br>`; const removeButton = document.createElement("button"); removeButton.textContent = "Remove"; removeButton.onclick = async () => { await remove(ref(db, `announcements/${id}`)); location.reload(); }; row.append(removeButton); area.append(row); });
 }
 
 async function propertyRequestsPage(user) {
@@ -300,16 +340,39 @@ async function adminHomeworksPage(user) {
   const data = await requireUser(user, true); if (!data) return;
   addSubjectOptions(document.querySelector("#homework-subject"));
   const questions = document.querySelector("#question-fields");
-  questions.innerHTML = [1, 2, 3].map(number => `<hr><b>Question ${number}${number === 1 ? " (required)" : " (optional)"}</b><br>Question: <input id="question-${number}"${number === 1 ? " required" : ""}><br>Choices (one per line):<br><textarea id="choices-${number}" rows="4" cols="35"${number === 1 ? " required" : ""}></textarea><br>Correct answer: <input id="answer-${number}">`).join("");
+  let questionCount = 0;
+  const addQuestion = () => {
+    questionCount += 1;
+    const number = questionCount;
+    const required = number === 1 ? " required" : "";
+    const editor = document.createElement("div");
+    editor.innerHTML = `<hr><b>Question ${number}${number === 1 ? " (required)" : " (optional)"}</b><br>Type: <select id="question-type-${number}"><option value="multiple-choice">Multiple choice</option><option value="matching">Matching</option></select><br>Question: <input id="question-${number}"${required}><br><span id="question-help-${number}">Choices (one per line):<br><textarea id="choices-${number}" rows="4" cols="35"${required}></textarea><br>Correct answer: <input id="answer-${number}"></span>`;
+    questions.append(editor);
+    editor.querySelector("select").addEventListener("change", event => {
+      const matching = event.target.value === "matching";
+      editor.querySelector(`#question-help-${number}`).innerHTML = matching ? `Matching pairs (one per line, use <b>left | right</b>):<br><textarea id="choices-${number}" rows="4" cols="35"${required}></textarea>` : `Choices (one per line):<br><textarea id="choices-${number}" rows="4" cols="35"${required}></textarea><br>Correct answer: <input id="answer-${number}">`;
+    });
+  };
+  [1, 2, 3].forEach(addQuestion);
+  document.querySelector("#add-question").addEventListener("click", addQuestion);
   document.querySelector("#homework-form").addEventListener("submit", async event => {
     event.preventDefault(); const savedQuestions = []; const answers = [];
-    for (let number = 1; number <= 3; number++) {
+    for (let number = 1; number <= questionCount; number++) {
       const text = document.querySelector(`#question-${number}`).value.trim(); if (!text) continue;
       const choices = document.querySelector(`#choices-${number}`).value.split("\n").map(value => value.trim()).filter(Boolean);
-      const answer = document.querySelector(`#answer-${number}`).value.trim();
-      if (choices.length < 2 || !choices.includes(answer)) return setMessage(`Question ${number} needs at least two choices, and its correct answer must exactly match one choice.`);
-      savedQuestions.push({ text, choices }); answers.push(answer);
+      const type = document.querySelector(`#question-type-${number}`).value;
+      if (type === "matching") {
+        const pairs = choices.map(value => value.split("|").map(part => part.trim())).filter(parts => parts.length === 2 && parts[0] && parts[1]);
+        if (pairs.length < 2 || pairs.length !== choices.length) return setMessage(`Matching question ${number} needs at least two pairs, one left item and one right item on every line, separated by |.`);
+        const matchingAnswers = Object.fromEntries(pairs);
+        savedQuestions.push({ type, text, pairs: pairs.map(([left, right]) => ({ left, right })) }); answers.push(matchingAnswers);
+      } else {
+        const answer = document.querySelector(`#answer-${number}`).value.trim();
+        if (choices.length < 2 || !choices.includes(answer)) return setMessage(`Question ${number} needs at least two choices, and its correct answer must exactly match one choice.`);
+        savedQuestions.push({ type, text, choices }); answers.push(answer);
+      }
     }
+    if (!savedQuestions.length) return setMessage("Add at least one question.");
     let picture;
     try { picture = await readHomeworkPicture(document.querySelector("#homework-picture").files[0]); }
     catch (error) { return setMessage(error.message); }
@@ -326,7 +389,7 @@ async function adminHomeworksPage(user) {
     if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "300px"; picture.style.maxHeight = "200px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.append(picture); }
     Object.entries(submissions).forEach(([uid, submission]) => {
       const review = document.createElement("div"); const studentName = users[uid]?.profile?.name || users[uid]?.profile?.username || "Student";
-      review.innerHTML = `<br><b>${h(studentName)}</b><br>Student answers: ${h(Object.values(submission.answers || {}).join(", "))}<br>Correct answers: ${h(Object.values(answerKey.answers || {}).join(", "))}<br>Overall grade (0-100): <input type="number" min="0" max="100" value="${h(submission.grade ?? "")}"> `;
+      review.innerHTML = `<br><b>${h(studentName)}</b><br>Student answers: ${h(Object.values(submission.answers || {}).map(homeworkAnswerText).join(", "))}<br>Correct answers: ${h(Object.values(answerKey.answers || {}).map(homeworkAnswerText).join(", "))}<br>Overall grade (0-100): <input type="number" min="0" max="100" value="${h(submission.grade ?? "")}"> `;
       const saveGrade = document.createElement("button"); saveGrade.textContent = "Save grade"; saveGrade.onclick = async () => {
         const grade = Number(review.querySelector("input").value);
         if (!Number.isFinite(grade) || grade < 0 || grade > 100) return setMessage("Enter a grade from 0 to 100.");
@@ -382,6 +445,7 @@ if (page === "auth") {
     if (page === "homeworks") await homeworksPage(user);
     if (page === "grades") await gradesPage(user);
     if (page === "upcoming-exams") await upcomingExamsPage(user);
+    if (page === "announcements") await announcementsPage(user);
     if (page === "admin") { const data = await requireUser(user, true); if (data) logOutLink(); }
     if (page === "property-requests") await propertyRequestsPage(user);
     if (page === "tax-forms") await taxFormsPage(user);
@@ -390,5 +454,6 @@ if (page === "auth") {
     if (page === "admin-homeworks") await adminHomeworksPage(user);
     if (page === "admin-grades") await adminGradesPage(user);
     if (page === "admin-exams") await adminExamsPage(user);
+    if (page === "admin-announcements") await adminAnnouncementsPage(user);
   } catch (error) { console.error(error); setMessage("There was a Firebase error. Check setup and permissions."); }
 });

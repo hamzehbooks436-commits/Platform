@@ -19,7 +19,12 @@ export const gradeHomework = onValueCreated("/homeworkSubmissions/{homeworkId}/{
 
   const answers = Object.values(submission.answers || {});
   const correctAnswers = Object.values(answerKey.answers);
-  const correct = correctAnswers.filter((answer, index) => answers[index] === answer).length;
+  const answerMatches = (answer, correctAnswer) => {
+    if (!correctAnswer || typeof correctAnswer !== "object") return answer === correctAnswer;
+    const entries = Object.entries(correctAnswer);
+    return !!answer && typeof answer === "object" && Object.keys(answer).length === entries.length && entries.every(([left, right]) => answer[left] === right);
+  };
+  const correct = correctAnswers.filter((answer, index) => answerMatches(answers[index], answer)).length;
   const grade = Math.round((correct / correctAnswers.length) * 100);
   await event.data.ref.update({ grade, correctAnswers, gradedAt: Date.now() });
 });
