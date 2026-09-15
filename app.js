@@ -245,12 +245,78 @@ async function userTaxFormPage(user) {
   const details = document.querySelector("#tax-form-details");
   if (!form || taxes.status === "paid") { details.textContent = "There is no unpaid tax form for you."; return; }
   details.innerHTML = `<b>Tax amount to pay:</b> ${h(form.amount)}`;
-  const payForm = document.querySelector("#pay-tax-form"); payForm.hidden = false;
-  payForm.addEventListener("submit", async event => {
-    event.preventDefault();
-    await set(ref(db, `taxPaymentRequests/${user.uid}`), { uid: user.uid, userName: data.profile?.name || data.profile?.username || "User", amount: form.amount, requestedAt: Date.now() });
-    setMessage("Your payment request was sent to the admin.");
+  document.querySelector("#tax-payment-link").innerHTML = '- <a href="tax-payment.html">Pay digitally with your Platform card</a>';
+}
+
+function mockCardMatches(bank) {
+  const number = document.querySelector("#payment-card-number").value.replace(/\D/g, "");
+  const expiry = document.querySelector("#payment-card-expiry").value.trim();
+  const code = document.querySelector("#payment-card-code").value.trim();
+  return number === String(bank.cardNumber) && expiry === String(bank.expiry) && code === String(bank.securityCode);
+}
+
+async function debitBankBalance(user, amountCents) {
+  const result = await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => {
+    const balance = Number(current || 0); return balance >= amountCents ? balance - amountCents : undefined;
   });
+  return result.committed;
+}
+
+async function taxPaymentPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  const form = (await get(ref(db, `users/${user.uid}/taxForm`))).val(); const taxes = (await get(ref(db, `users/${user.uid}/taxes`))).val() || {};
+  const details = document.querySelector("#tax-payment-details");
+  if (!form || taxes.status === "paid") { details.textContent = "There is no unpaid tax form for you."; return; }
+  const amountCents = Math.round(Number(form.amount) * 100);
+  if (!Number.isSafeInteger(amountCents) || amountCents < 0) { details.textContent = "This tax amount is invalid."; return; }
+  const bank = await ensureBankAccount(user, data.profile); details.innerHTML = `<b>Tax to pay:</b> ${h(formatJod(amountCents))}<br><b>Available balance:</b> ${h(formatJod(bank.balanceCents))}`;
+  const paymentForm = document.querySelector("#tax-card-form"); paymentForm.hidden = false;
+  paymentForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!mockCardMatches(bank)) return setMessage("Use the mock card details shown on your Bank page.");
+    if (!await debitBankBalance(user, amountCents)) return setMessage("You do not have enough money to pay this tax.");
+    try {
+      await Promise.all([set(ref(db, `users/${user.uid}/taxes/status`), "paid"), set(ref(db, `users/${user.uid}/taxes/paidAt`), Date.now())]);
+      setMessage(`Tax payment of ${formatJod(amountCents)} was completed.`); paymentForm.hidden = true;
+    } catch (error) {
+      await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => Number(current || 0) + amountCents);
+      setMessage("The tax status could not be updated, so your money was returned.");
+    }
+  });
+}
+
+async function rentPaymentPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  const property = (await get(ref(db, `users/${user.uid}/property`))).val() || {}; const amountCents = Math.round(Number(property.rent) * 100);
+  const month = new Date().toISOString().slice(0, 7); const priorPayment = (await get(ref(db, `users/${user.uid}/rentPayments/${month}`))).val();
+  const details = document.querySelector("#rent-payment-details");
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) { details.textContent = "Set a valid monthly rent in your property details first."; return; }
+  if (priorPayment) { details.innerHTML = `<b>${h(month)}</b> rent of ${h(formatJod(priorPayment.amountCents))} has already been paid.`; return; }
+  const bank = await ensureBankAccount(user, data.profile); details.innerHTML = `<b>${h(month)}</b> rent: ${h(formatJod(amountCents))}<br><b>Available balance:</b> ${h(formatJod(bank.balanceCents))}`;
+  const paymentForm = document.querySelector("#rent-card-form"); paymentForm.hidden = false;
+  paymentForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!mockCardMatches(bank)) return setMessage("Use the mock card details shown on your Bank page.");
+    if (!await debitBankBalance(user, amountCents)) return setMessage("You do not have enough money to pay this rent.");
+    try {
+      await set(ref(db, `users/${user.uid}/rentPayments/${month}`), { amountCents, paidAt: Date.now() });
+      setMessage(`Rent payment of ${formatJod(amountCents)} was completed.`); paymentForm.hidden = true;
+    } catch (error) {
+      await runTransaction(ref(db, `users/${user.uid}/bank/balanceCents`), current => Number(current || 0) + amountCents);
+      setMessage("The rent payment could not be saved, so your money was returned.");
+    }
+  });
+}
+
+async function financesPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  const [bank, property, taxes, taxForm] = await Promise.all([
+    ensureBankAccount(user, data.profile), get(ref(db, `users/${user.uid}/property`)).then(snap => snap.val() || {}), get(ref(db, `users/${user.uid}/taxes`)).then(snap => snap.val() || { status: "unpaid", amount: 0 }), get(ref(db, `users/${user.uid}/taxForm`)).then(snap => snap.val())
+  ]);
+  const month = new Date().toISOString().slice(0, 7); const rentPayment = (await get(ref(db, `users/${user.uid}/rentPayments/${month}`))).val();
+  const rentCents = Math.max(0, Math.round(Number(property.rent || 0) * 100)); const taxCents = Math.max(0, Math.round(Number(taxForm?.amount ?? taxes.amount ?? 0) * 100));
+  const spacedNumber = String(bank.cardNumber || "").replace(/(.{4})/g, "$1 ").trim(); const area = document.querySelector("#finance-details");
+  area.innerHTML = `<b>Bank balance:</b> ${h(formatJod(bank.balanceCents))}<br><b>Mock card:</b> ${h(spacedNumber)}<br>Cardholder: ${h(bank.cardholder)}<br>Expiry: ${h(bank.expiry)}<hr><b>Rent for ${h(month)}:</b> ${h(formatJod(rentCents))} — ${rentPayment ? "paid" : "needed"}<br>${rentPayment ? "" : '- <a href="rent-payment.html">Pay rent</a><br>'}<br><b>Taxes:</b> ${h(formatJod(taxCents))} — ${h(taxes.status || "unpaid")}<br>${taxForm && taxes.status !== "paid" ? '- <a href="tax-payment.html">Pay taxes</a>' : '- <a href="taxes.html">Open taxes</a>'}`;
 }
 
 async function schoolPage(user) {
@@ -318,7 +384,7 @@ async function homeworksPage(user) {
   assignments.forEach(([id, item]) => {
     const box = document.createElement("div"); const questions = Object.values(item.questions || {});
     const style = item.style || {}; box.style.color = validFontColour(style.fontColor); box.style.fontSize = `${validFontSize(style.fontSize)}px`; box.style.backgroundColor = validColour(style.backgroundColor); box.style.padding = "10px";
-    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><form id="work-${id}">${questions.map(homeworkQuestionHtml).join("")}<button>Submit homework</button></form><div id="result-${id}"></div>`;
+    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b>${item.dueDate ? `<br><b>Due:</b> ${h(item.dueDate)}` : ""}<form id="work-${id}">${questions.map(homeworkQuestionHtml).join("")}<button>Submit homework</button></form><div id="result-${id}"></div>`;
     if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "100%"; picture.style.maxHeight = "450px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.querySelector("form").before(picture); }
     area.append(box);
     const result = box.querySelector(`#result-${id}`);
@@ -349,6 +415,27 @@ async function upcomingExamsPage(user) {
   const school = (await get(ref(db, `users/${user.uid}/school`))).val(); const taken = new Set(selectedSubjects(school));
   const exams = (await get(ref(db, "upcomingExams"))).val() || {}; const list = Object.values(exams).filter(exam => taken.has(exam.subject));
   document.querySelector("#exam-list").innerHTML = list.length ? list.map(exam => `<hr><b>${h(exam.subject)}</b><br>${h(exam.date)}<br>${h(exam.details)}`).join("") : "There are no upcoming exams for your selected subjects.";
+}
+
+function calendarMonth(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(undefined, { month: "long", year: "numeric" });
+}
+
+async function calendarPage(user) {
+  const data = await requireUser(user); if (!data) return;
+  if (Number(data.profile?.age) > 19) return redirect("home.html");
+  const school = (await get(ref(db, `users/${user.uid}/school`))).val();
+  if (![...requiredSubjects].every(subject => school?.subjects?.[subject]?.taken)) return redirect("school-register.html");
+  const taken = new Set(selectedSubjects(school)); const grouped = new Map();
+  const add = (month, item) => { if (!grouped.has(month)) grouped.set(month, []); grouped.get(month).push(item); };
+  Object.entries(school.subjects || {}).filter(([, subject]) => subject?.taken && subject.examDate).forEach(([subject, item]) => add(item.examDate, `${subject} exam period`));
+  const [exams, homeworks] = await Promise.all([get(ref(db, "upcomingExams")).then(snap => snap.val() || {}), get(ref(db, "homeworks")).then(snap => snap.val() || {})]);
+  Object.values(exams).filter(exam => taken.has(exam.subject) && exam.date).forEach(exam => add(calendarMonth(exam.date), `${exam.subject} exam — ${exam.date}${exam.details ? `: ${exam.details}` : ""}`));
+  Object.values(homeworks).filter(homework => taken.has(homework.subject) && homework.dueDate).forEach(homework => add(calendarMonth(homework.dueDate), `Homework due: ${homework.subject} — ${homework.title} (${homework.dueDate})`));
+  const area = document.querySelector("#calendar-list");
+  const months = [...grouped.keys()].sort((a, b) => new Date(a) - new Date(b));
+  area.innerHTML = months.length ? months.map(month => `<hr><b>${h(month)}</b><br>${grouped.get(month).map(item => `- ${h(item)}`).join("<br>")}`).join("") : "There are no exam dates or homework due dates yet.";
 }
 
 async function announcementsPage(user) {
@@ -471,14 +558,14 @@ async function adminHomeworksPage(user) {
     catch (error) { return setMessage(error.message); }
     const style = { fontColor: document.querySelector("#homework-font-color").value, fontSize: validFontSize(document.querySelector("#homework-font-size").value), backgroundColor: document.querySelector("#homework-background-color").value };
     const id = push(ref(db, "homeworks")).key;
-    await update(ref(db), { [`homeworks/${id}`]: { subject: document.querySelector("#homework-subject").value, title: document.querySelector("#homework-title").value.trim(), questions: savedQuestions, picture, style, createdAt: Date.now() }, [`homeworkAnswerKeys/${id}`]: { answers } });
+    await update(ref(db), { [`homeworks/${id}`]: { subject: document.querySelector("#homework-subject").value, title: document.querySelector("#homework-title").value.trim(), dueDate: document.querySelector("#homework-due-date").value, questions: savedQuestions, picture, style, createdAt: Date.now() }, [`homeworkAnswerKeys/${id}`]: { answers } });
     setMessage("Homework was created."); document.querySelector("#homework-form").reset(); location.reload();
   });
   const items = (await get(ref(db, "homeworks"))).val() || {}; const users = (await get(ref(db, "users"))).val() || {}; const area = document.querySelector("#admin-homework-list"); area.innerHTML = "";
   if (!Object.keys(items).length) area.textContent = "No homeworks yet.";
   for (const [id, item] of Object.entries(items)) {
     const submissions = (await get(ref(db, `homeworkSubmissions/${id}`))).val() || {}; const answerKey = (await get(ref(db, `homeworkAnswerKeys/${id}`))).val() || {}; const box = document.createElement("div");
-    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b><br>Submissions: ${h(Object.keys(submissions).length)}`;
+    box.innerHTML = `<hr><b>${h(item.subject)}: ${h(item.title)}</b>${item.dueDate ? `<br>Due: ${h(item.dueDate)}` : ""}<br>Submissions: ${h(Object.keys(submissions).length)}`;
     if (typeof item.picture === "string" && item.picture.startsWith("data:image/")) { const picture = document.createElement("img"); picture.src = item.picture; picture.alt = item.title || "Homework picture"; picture.style.maxWidth = "300px"; picture.style.maxHeight = "200px"; picture.style.display = "block"; picture.style.margin = "10px 0"; box.append(picture); }
     Object.entries(submissions).forEach(([uid, submission]) => {
       const review = document.createElement("div"); const studentName = users[uid]?.profile?.name || users[uid]?.profile?.username || "Student";
@@ -529,9 +616,12 @@ if (page === "auth") {
     if (page === "home") await homePage(user);
     if (page === "property") await propertyPage(user);
     if (page === "bank") await bankPage(user);
+    if (page === "finances") await financesPage(user);
     if (page === "property-request") await propertyRequestPage(user);
     if (page === "taxes") await taxesPage(user);
     if (page === "user-tax-form") await userTaxFormPage(user);
+    if (page === "tax-payment") await taxPaymentPage(user);
+    if (page === "rent-payment") await rentPaymentPage(user);
     if (page === "school") await schoolPage(user);
     if (page === "school-register") await schoolRegisterPage(user);
     if (page === "stem-subjects") await subjectsPage(user, stemSubjects);
@@ -539,6 +629,7 @@ if (page === "auth") {
     if (page === "homeworks") await homeworksPage(user);
     if (page === "grades") await gradesPage(user);
     if (page === "upcoming-exams") await upcomingExamsPage(user);
+    if (page === "calendar") await calendarPage(user);
     if (page === "announcements") await announcementsPage(user);
     if (page === "admin") { const data = await requireUser(user, true); if (data) logOutLink(); }
     if (page === "property-requests") await propertyRequestsPage(user);
